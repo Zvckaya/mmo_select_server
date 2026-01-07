@@ -130,6 +130,7 @@
   <ItemGroup>
     <ClInclude Include="CRingBuffer.h" />
     <ClInclude Include="NetConfig.h" />
+    <ClInclude Include="Player.h" />
     <ClInclude Include="Session.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

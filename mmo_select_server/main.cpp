@@ -2,6 +2,7 @@
 #include <WinSock2.h>
 #include <Windows.h>
 #include <mmsystem.h>
+#include <vector>
 
 #include "NetConfig.h"
 #include "Session.h"      // Session 정의
@@ -14,6 +15,13 @@ bool bServerFlag = true;
 WSADATA wsaData;
 SOCKET sListenSocket;
 linger _linger; 
+
+fd_set listenSet;
+fd_set readSet;
+fd_set writeSet;
+
+std::vector<Session*> sessions;
+
 
 bool serverInitailize()
 {
@@ -64,6 +72,86 @@ bool startServer()
 	return true;
 
 }
+
+void NetworkProc()
+{
+	{
+		FD_ZERO(&listenSet);
+		FD_SET(sListenSocket, &listenSet);
+
+		timeval tv = { 0,0 };
+
+		int ret = select(0, &listenSet, nullptr, nullptr, &tv);
+		
+
+		if (ret > 0)
+		{
+			sockaddr_in clientAddr;
+			int addrLen = sizeof(clientAddr);
+			SOCKET clientSocket = accept(sListenSocket, (SOCKADDR*)&clientAddr,&addrLen);
+
+
+			if (clientSocket != INVALID_SOCKET)
+			{
+				std::cerr << "소켓 연결에러 ";
+			}
+			
+			if (sessions.size() >= MAX_SESSIONS)
+			{
+				setsockopt(clientSocket, SOL_SOCKET, SO_LINGER, (char*)&_linger, sizeof(_linger));
+				closesocket(clientSocket);
+				return;
+			}
+		
+			u_long mode = 1;
+			ioctlsocket(clientSocket, FIONBIO, &mode);
+
+			Session* newSession = new Session(clientSocket,playercnt);
+			playercnt++;
+
+			sessions.push_back(newSession);
+
+		}
+	}
+
+	int totalSessions = (int)sessions.size();
+
+	for (int i = 0; i < totalSessions; i += 64)
+	{
+		FD_ZERO(&readSet);
+		FD_ZERO(&writeSet);
+
+		int count = 0;
+
+		for (int j = 0; j < 64; ++j)
+		{
+			if (i + j >= totalSessions)
+				break;
+
+			Session* s = sessions[i + j];
+
+			if (s->isDisconnect == true)
+				continue;
+
+			FD_SET(s->socket, &readSet);
+
+			if (s->sendBuffer->GetUseSize() > 0)
+			{
+				FD_SET(s->socket, &writeSet);
+			}
+			count++;
+		}
+
+		if (count == 0)
+			continue;
+
+		timeval tv = { 0,0 };
+
+		int ret = select(0, &readSet, &writeSet, nullptr,&tv);
+	}
+}
+
+
 
 int main()
 {
