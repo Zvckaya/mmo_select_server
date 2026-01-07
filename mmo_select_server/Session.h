@@ -4,8 +4,10 @@
 class CRingBuffer;
 
 
-struct Session
+class Session
 {
+	Session();
+	~Session();
 	SOCKET socket;
 	int id;
 

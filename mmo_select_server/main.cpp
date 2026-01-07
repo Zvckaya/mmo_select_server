@@ -44,9 +44,26 @@ bool serverInitailize()
 	_linger.l_onoff = 1; //링거 구조체 초기화
 	_linger.l_linger = 0;
 
+
+	std::cout << "서버 초기화 성공\n";
 	return true;
 }
 
+bool startServer()
+{
+	if (listen(sListenSocket, SOMAXCONN_HINT(200,65535))==SOCKET_ERROR) //절절한 값으로 조절 
+	{
+		std::cerr << "리스닝 실패";
+		return false;
+	}
+
+	u_long mode = 1;
+	ioctlsocket(sListenSocket, FIONBIO, &mode);
+
+	std::cout << "리스닝...PORT:" << PORT << "\n";
+	return true;
+
+}
 
 int main()
 {
@@ -57,12 +74,17 @@ int main()
 		std::cerr << "서버 초기화 실패"<<std::endl;
 		return 0;
 	}
+
+	if (startServer()==false)
+	{
+		std::cerr << "리스닝 실패" << std::endl;
+	}
 	
 	
 
 	while (bServerFlag)
 	{
-		//
+
 	}
 
 
