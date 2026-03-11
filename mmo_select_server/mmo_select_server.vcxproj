@@ -125,13 +125,22 @@
   <ItemGroup>
     <ClCompile Include="CRIngBuffer.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="PacketProc.cpp" />
+    <ClCompile Include="Player.cpp" />
+    <ClCompile Include="Sector.cpp" />
     <ClCompile Include="Session.cpp" />
+    <ClCompile Include="Update.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="CRingBuffer.h" />
+    <ClInclude Include="GameConfig.h" />
     <ClInclude Include="NetConfig.h" />
+    <ClInclude Include="PacketProc.h" />
     <ClInclude Include="Player.h" />
+    <ClInclude Include="Protocol.h" />
+    <ClInclude Include="Sector.h" />
     <ClInclude Include="Session.h" />
+    <ClInclude Include="Update.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

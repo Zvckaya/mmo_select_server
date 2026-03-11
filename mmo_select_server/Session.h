@@ -15,9 +15,10 @@ public:
 	Player* p;
 	bool isDisconnect = false;
 
-	int id;
+	int   id;
+	ULONGLONG lastRecvTime = 0;
+	bool  notified = false;   // OnSessionDisconnected 호출 완료 여부
+
 	CRingBuffer* recvBuffer;
 	CRingBuffer* sendBuffer;
-
-	
 };

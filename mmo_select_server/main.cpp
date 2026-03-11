@@ -3,18 +3,28 @@
 #include <Windows.h>
 #include <mmsystem.h>
 #include <vector>
+#include <thread>
+#include <chrono>
+#include <algorithm>
+#include <cstdlib>
+#include <ctime>
 
 #include "NetConfig.h"
-#include "Session.h"      // Session Á¤ÀÇ
-#include "CRingBuffer.h"  // main¿¡¼­ ¹öÆÛ ÇÔ¼öµéÀ» ¾²·Á¸é ¿©±âµµ ÇÊ¿äÇÒ ¼ö ÀÖÀ½
+#include "GameConfig.h"
+#include "Session.h"
+#include "CRingBuffer.h"
+#include "Protocol.h"
+#include "PacketProc.h"
+#include "Update.h"
 
 #pragma comment(lib, "winmm.lib")
 #pragma comment(lib, "Ws2_32.lib")
 
 bool bServerFlag = true;
+int playercnt = 1;
 WSADATA wsaData;
 SOCKET sListenSocket;
-linger _linger; 
+linger _linger;
 
 fd_set listenSet;
 fd_set readSet;
@@ -23,97 +33,117 @@ fd_set writeSet;
 std::vector<Session*> sessions;
 
 
-bool serverInitailize()
+bool ServerInitailize()
 {
 	if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
 	{
-		std::cerr << "¼­¹ö ÃÊ±âÈ­ ½ÇÆĞ";
+		std::cerr << "wsastartup failed";
 		return false;
 	}
 
 	sListenSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (sListenSocket == INVALID_SOCKET)
 	{
-		std::cerr << "¸®½¼¼ÒÄÏ ÃÊ±âÈ­ ½ÇÆĞ";
+		std::cerr << "listen socket initailized failed";
 		return false;
 	}
 
 	sockaddr_in serverAddr;
-	serverAddr.sin_family = AF_INET;
-	serverAddr.sin_port = htons(PORT);
-	serverAddr.sin_addr.s_addr = htonl(INADDR_ANY); //¸ğµç NIC Ä«µå i/o °¨Áö
+	serverAddr.sin_family      = AF_INET;
+	serverAddr.sin_port        = htons(PORT);
+	serverAddr.sin_addr.s_addr = htonl(INADDR_ANY);
 
 	if (bind(sListenSocket, (SOCKADDR*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR)
 	{
-		std::cerr << "¹ÙÀÎµù ½ÇÆĞ";
+		std::cerr << "bind failed";
 		return false;
 	}
 
-	_linger.l_onoff = 1; //¸µ°Å ±¸Á¶Ã¼ ÃÊ±âÈ­
+	_linger.l_onoff  = 1;
 	_linger.l_linger = 0;
 
-
-	std::cout << "¼­¹ö ÃÊ±âÈ­ ¼º°ø\n";
+	std::cout << "initalized complete\n";
 	return true;
 }
 
-bool startServer()
+bool StartServer()
 {
-	if (listen(sListenSocket, SOMAXCONN_HINT(200,65535))==SOCKET_ERROR) //ÀıÀıÇÑ °ªÀ¸·Î Á¶Àı 
+	if (listen(sListenSocket, SOMAXCONN_HINT(200, 65535)) == SOCKET_ERROR)
 	{
-		std::cerr << "¸®½º´× ½ÇÆĞ";
+		std::cerr << "listen failed";
 		return false;
 	}
 
 	u_long mode = 1;
 	ioctlsocket(sListenSocket, FIONBIO, &mode);
 
-	std::cout << "¸®½º´×...PORT:" << PORT << "\n";
+	std::cout << "listening...PORT:" << PORT << "\n";
 	return true;
+}
 
+//------------------------------------------------------------------
+// ì§€ì—° ì‚­ì œ: í•œ í”„ë ˆì„(NetworkProc + Update) ì´ ëª¨ë‘ ëë‚œ ë’¤ì—ë§Œ í˜¸ì¶œ
+// - ë£¨í”„ ë„ì¤‘ isDisconnect=true ë¡œ ë§ˆí‚¹ë§Œ í•´ë‘ê³ 
+// - ì—¬ê¸°ì„œ DELETE ë¸Œë¡œë“œìºìŠ¤íŠ¸, ì„¹í„° ì œê±°, ë©”ëª¨ë¦¬ í•´ì œë¥¼ ì¼ê´„ ì²˜ë¦¬
+//------------------------------------------------------------------
+static void CleanupDeadSessions()
+{
+	for (auto* s : sessions)
+	{
+		if (s->isDisconnect && !s->notified)
+			OnSessionDisconnected(s);
+	}
+
+	sessions.erase(
+		std::remove_if(sessions.begin(), sessions.end(), [](Session* s) {
+			if (s->isDisconnect) { delete s; return true; }
+			return false;
+		}),
+		sessions.end()
+	);
 }
 
 void NetworkProc()
 {
+	//------------------------------------------------------------------
+	// ëŒ€ê¸° ì¤‘ì¸ ì—°ê²° ëª¨ë‘ ìˆ˜ë½
+	//------------------------------------------------------------------
+	while (true)
 	{
-		FD_ZERO(&listenSet);
-		FD_SET(sListenSocket, &listenSet);
+		sockaddr_in clientAddr;
+		int addrLen = sizeof(clientAddr);
+		SOCKET clientSocket = accept(sListenSocket, (SOCKADDR*)&clientAddr, &addrLen);
 
-		timeval tv = { 0,0 };
-
-		int ret = select(0, &listenSet, nullptr, nullptr, &tv);
-		
-
-		if (ret > 0)
+		if (clientSocket == INVALID_SOCKET)
 		{
-			sockaddr_in clientAddr;
-			int addrLen = sizeof(clientAddr);
-			SOCKET clientSocket = accept(sListenSocket, (SOCKADDR*)&clientAddr,&addrLen);
-
-
-			if (clientSocket != INVALID_SOCKET)
-			{
-				std::cerr << "¼ÒÄÏ ¿¬°á¿¡·¯ ";
-			}
-			
-			if (sessions.size() >= MAX_SESSIONS)
-			{
-				setsockopt(clientSocket, SOL_SOCKET, SO_LINGER, (char*)&_linger, sizeof(_linger));
-				closesocket(clientSocket);
-				return;
-			}
-		
-			u_long mode = 1;
-			ioctlsocket(clientSocket, FIONBIO, &mode);
-
-			Session* newSession = new Session(clientSocket,playercnt);
-			playercnt++;
-
-			sessions.push_back(newSession);
-
+			// WSAEWOULDBLOCK: ëŒ€ê¸° ì¤‘ì¸ ì—°ê²° ì—†ìŒ (ì •ìƒ)
+			// ê·¸ ì™¸ ì—ëŸ¬: ë¦¬ìŠ¨ ì†Œì¼“ ì´ìƒ â†’ ë¡œê·¸ë§Œ ë‚¨ê¸°ê³  ë£¨í”„ íƒˆì¶œ
+			if (WSAGetLastError() != WSAEWOULDBLOCK)
+				std::cerr << "[accept error] WSAError=" << WSAGetLastError() << "\n";
+			break;
 		}
+
+		if (sessions.size() >= MAX_SESSIONS)
+		{
+			HardClose(clientSocket);
+			continue;
+		}
+
+		u_long mode = 1;
+		ioctlsocket(clientSocket, FIONBIO, &mode);
+
+		Session* newSession = new Session(clientSocket, playercnt);
+		playercnt++;
+
+		sessions.push_back(newSession);
+		OnSessionConnected(newSession);
 	}
 
+	//------------------------------------------------------------------
+	// ì„¸ì…˜ I/O ì²˜ë¦¬ (64ê°œ ë‹¨ìœ„ select)
+	// â€» ì´ ë£¨í”„ ì•ˆì—ì„œëŠ” isDisconnect ë§ˆí‚¹ê³¼ closesocket ë§Œ ìˆ˜í–‰
+	//   OnSessionDisconnected / delete ëŠ” CleanupDeadSessions() ì—ì„œ ì²˜ë¦¬
+	//------------------------------------------------------------------
 	int totalSessions = (int)sessions.size();
 
 	for (int i = 0; i < totalSessions; i += 64)
@@ -130,51 +160,152 @@ void NetworkProc()
 
 			Session* s = sessions[i + j];
 
-			if (s->isDisconnect == true)
+			if (s->isDisconnect)
 				continue;
 
 			FD_SET(s->socket, &readSet);
 
 			if (s->sendBuffer->GetUseSize() > 0)
-			{
 				FD_SET(s->socket, &writeSet);
-			}
+
 			count++;
 		}
 
 		if (count == 0)
 			continue;
 
-		timeval tv = { 0,0 };
+		timeval tv = { 0, 0 };
+		int ret = select(0, &readSet, &writeSet, nullptr, &tv);
 
-		int ret = select(0, &readSet, &writeSet, nullptr,&tv);
+		if (ret <= 0)
+			continue;
+
+		for (int j = 0; j < 64; ++j)
+		{
+			if (i + j >= totalSessions)
+				break;
+
+			Session* s = sessions[i + j];
+
+			if (s->isDisconnect)
+				continue;
+
+			//------------------------------------------------------
+			// recv
+			//------------------------------------------------------
+			if (FD_ISSET(s->socket, &readSet))
+			{
+				int freeSize = s->recvBuffer->DirectEnqueueSize();
+				if (freeSize > 0)
+				{
+					int recvBytes = recv(s->socket, s->recvBuffer->GetRearBufferPtr(), freeSize, 0);
+					if (recvBytes == 0)
+					{
+						// í´ë¼ì´ì–¸íŠ¸ ì •ìƒ ì¢…ë£Œ (FIN)
+						s->isDisconnect = true;
+						HardClose(s->socket);
+						continue;
+					}
+					if (recvBytes == SOCKET_ERROR)
+					{
+						if (WSAGetLastError() != WSAEWOULDBLOCK)
+						{
+							s->isDisconnect = true;
+							HardClose(s->socket);
+						}
+						continue;
+					}
+
+					s->recvBuffer->MoveRear(recvBytes);
+
+					// íŒ¨í‚· íŒŒì‹± ë£¨í”„: ì™„ì„±ëœ íŒ¨í‚·ì´ ìˆëŠ” ë™ì•ˆ ì²˜ë¦¬
+					while (s->recvBuffer->GetUseSize() >= (int)sizeof(st_PACKET_HEADER))
+					{
+						st_PACKET_HEADER header;
+						s->recvBuffer->Peek((char*)&header, sizeof(st_PACKET_HEADER));
+
+						// íŒ¨í‚· ì½”ë“œ ë¶ˆì¼ì¹˜ â†’ ë¹„ì •ìƒ í´ë¼ì´ì–¸íŠ¸
+						if (header.byCode != dfPACKET_CODE)
+						{
+							s->isDisconnect = true;
+							HardClose(s->socket);
+							break;
+						}
+
+						// í˜ì´ë¡œë“œê°€ ì•„ì§ ëœ ì™”ìœ¼ë©´ ë‹¤ìŒ recv ëŒ€ê¸°
+						if (s->recvBuffer->GetUseSize() < (int)(sizeof(st_PACKET_HEADER) + header.bySize))
+							break;
+
+						// í—¤ë” ì†Œë¹„
+						s->recvBuffer->Dequeue((char*)&header, sizeof(st_PACKET_HEADER));
+
+						// í˜ì´ë¡œë“œ ì†Œë¹„
+						char payload[256] = {};
+						if (header.bySize > 0)
+							s->recvBuffer->Dequeue(payload, header.bySize);
+
+						// íŒ¨í‚· ì²˜ë¦¬ (false = ì•Œ ìˆ˜ ì—†ëŠ” íƒ€ì… â†’ ë§ˆí‚¹)
+						if (!PacketProc(s, header.byType, payload, header.bySize))
+						{
+							s->isDisconnect = true;
+							HardClose(s->socket);
+							break;
+						}
+					}
+				}
+			}
+
+			//------------------------------------------------------
+			// send
+			//------------------------------------------------------
+			if (!s->isDisconnect && FD_ISSET(s->socket, &writeSet))
+			{
+				int sendSize = s->sendBuffer->DirectDequeueSize();
+				if (sendSize > 0)
+				{
+					int sentBytes = send(s->socket, s->sendBuffer->GetFrontBufferPtr(), sendSize, 0);
+					if (sentBytes == SOCKET_ERROR)
+					{
+						// WSAEWOULDBLOCK: OS TCP ë²„í¼ í¬í™”, ë‹¤ìŒ í”„ë ˆì„ì— ì¬ì‹œë„ (ì •ìƒ)
+						if (WSAGetLastError() != WSAEWOULDBLOCK)
+						{
+							s->isDisconnect = true;
+							HardClose(s->socket);
+						}
+					}
+					else
+					{
+						s->sendBuffer->MoveFront(sentBytes);
+					}
+				}
+			}
+		}
 	}
 }
 
 
-
 int main()
 {
+	srand((unsigned)time(nullptr));
 	timeBeginPeriod(1);
 
-	if (serverInitailize()==false)
+	if (!ServerInitailize())
 	{
-		std::cerr << "¼­¹ö ÃÊ±âÈ­ ½ÇÆĞ"<<std::endl;
+		std::cerr << "Server Init Failed" << std::endl;
 		return 0;
 	}
-
-	if (startServer()==false)
+	if (!StartServer())
 	{
-		std::cerr << "¸®½º´× ½ÇÆĞ" << std::endl;
+		std::cerr << "Server Start Failed" << std::endl;
 	}
-	
-	
 
 	while (bServerFlag)
 	{
-
+		NetworkProc();
+		Update();
+		CleanupDeadSessions();   // í”„ë ˆì„ ëì—ì„œ ì¼ê´„ ì •ë¦¬
+		std::this_thread::sleep_for(std::chrono::milliseconds(SERVER_FRAME_MS));
 	}
-
 
 	timeEndPeriod(1);
 }
