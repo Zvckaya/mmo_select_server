@@ -65,6 +65,7 @@ st_SECTOR_POS GetSectorPos(short worldX, short worldY)
 void GetSectorAround(st_SECTOR_POS pos, st_SECTOR_AROUND* out)
 {
 	out->count = 0;
+	
 	for (short dy = -1; dy <= 1; ++dy)
 	for (short dx = -1; dx <= 1; ++dx)
 	{

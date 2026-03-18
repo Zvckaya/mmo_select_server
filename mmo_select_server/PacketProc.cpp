@@ -293,6 +293,9 @@ static bool PacketProc_MoveStop(Session* s, const char* payload, BYTE size)
 	p->_x = x;
 	p->_y = y;
 
+	if (Sector_UpdateSession(s))
+		CharacterSectorUpdatePacket(s);
+
 	// SC_MOVE_STOP 브로드캐스트 (자신 포함)
 	char buf[16];
 	BYTE sz = buildMovePayload(buf, s->id, dir, x, y);
@@ -317,6 +320,9 @@ static bool HandleAttack(Session* s, const char* payload, BYTE size,
 	p->_x = x;
 	p->_y = y;
 
+	if (Sector_UpdateSession(s))
+		CharacterSectorUpdatePacket(s);
+
 	// SC_ATTACK 브로드캐스트
 	char buf[32];
 	BYTE sz = buildMovePayload(buf, s->id, p->_direction, x, y);
@@ -336,8 +342,7 @@ static bool HandleAttack(Session* s, const char* payload, BYTE size,
 
 		// SC_DAMAGE 브로드캐스트
 		sz = buildDamagePayload(buf, s->id, target->id, target->p->_hp);
-		SendPacket_Around(s, dfPACKET_SC_DAMAGE, buf, sz, true);
-
+		SendPacket_Around(target, dfPACKET_SC_DAMAGE, buf, sz, true);
 		// HP <= 0: 마킹만, 실제 정리는 CleanupDeadSessions() 에서
 		if (target->p->_hp <= 0)
 		{
