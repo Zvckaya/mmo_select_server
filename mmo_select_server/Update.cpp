@@ -5,6 +5,7 @@
 #include "Player.h"
 #include "PacketProc.h"
 #include "Sector.h"
+#include "Logger.h"
 #include <Windows.h>
 #include <vector>
 
@@ -79,6 +80,9 @@ void Update()
 		//------------------------------------------------------
 		if (p->_hp <= 0)
 		{
+			Logger::get_instance().log(Logger::LogLevel::Info,
+				"Session %d: HP depleted (HP=%d) -> disconnect", s->id, (int)p->_hp);
+
 			s->isDisconnect = true;
 			HardClose(s->socket);
 			continue;
@@ -89,6 +93,10 @@ void Update()
 		//------------------------------------------------------
 		if (dwCurTick - s->lastRecvTime > dfNETWORK_PACKET_RECV_TIMEOUT)
 		{
+			Logger::get_instance().log(Logger::LogLevel::Warning,
+				"Session %d: recv timeout (%llu ms) -> disconnect",
+				s->id, dwCurTick - s->lastRecvTime);
+
 			s->isDisconnect = true;
 			HardClose(s->socket);
 			continue;

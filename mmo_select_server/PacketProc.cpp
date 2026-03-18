@@ -2,6 +2,7 @@
 #include "Sector.h"
 #include "Player.h"
 #include "CRingBuffer.h"
+#include "Logger.h"
 #include <Windows.h>
 #include <cstring>
 #include <cstdlib>
@@ -120,6 +121,10 @@ static BYTE buildDamagePayload(char* buf, int attackID, int damageID, char hp)
 
 void OnSessionConnected(Session* newSession)
 {
+	Logger::get_instance().log(Logger::LogLevel::Info,
+		"Session %d connected (x=%d, y=%d)",
+		newSession->id, (int)newSession->p->_x, (int)newSession->p->_y);
+
 	Player* p = newSession->p;
 	char buf[32];
 	BYTE sz;
@@ -159,6 +164,9 @@ void OnSessionDisconnected(Session* s)
 	// 중복 호출 방지 (SendPacket 버퍼오버 → cleanup 루프에서 재호출될 수 있음)
 	if (s->notified) return;
 	s->notified = true;
+
+	Logger::get_instance().log(Logger::LogLevel::Info,
+		"Session %d disconnected (broadcasting DELETE, removing from sector)", s->id);
 
 	char buf[8];
 	BYTE sz = buildDeletePayload(buf, s->id);
@@ -227,7 +235,12 @@ static bool IsInAttackRange(Session* attacker, Session* target, int rangeX, int 
 
 static bool PacketProc_MoveStart(Session* s, const char* payload, BYTE size)
 {
-	if (size < 5) return false;
+	if (size < 5)
+	{
+		Logger::get_instance().log(Logger::LogLevel::Warning,
+			"Session %d: MOVE_START payload too short (size=%d) -> disconnect", s->id, (int)size);
+		return false;
+	}
 
 	int   off = 0;
 	BYTE  dir = unpackByte (payload, off);
@@ -239,6 +252,10 @@ static bool PacketProc_MoveStart(Session* s, const char* payload, BYTE size)
 	// 위치 오차 검증: 서버 기준 위치와 클라이언트 보고 위치 차이가 허용 범위 초과 시 강제 보정
 	if (abs(p->_x - x) > dfERROR_RANGE || abs(p->_y - y) > dfERROR_RANGE)
 	{
+		Logger::get_instance().log(Logger::LogLevel::Warning,
+			"Session %d: MOVE_START SYNC sent (client=%d,%d / server=%d,%d)",
+			s->id, (int)x, (int)y, (int)p->_x, (int)p->_y);
+
 		char buf[16];
 		BYTE sz = buildSyncPayload(buf, s->id, p->_x, p->_y);
 		SendPacket(s, dfPACKET_SC_SYNC, buf, sz);
@@ -269,7 +286,12 @@ static bool PacketProc_MoveStart(Session* s, const char* payload, BYTE size)
 
 static bool PacketProc_MoveStop(Session* s, const char* payload, BYTE size)
 {
-	if (size < 5) return false;
+	if (size < 5)
+	{
+		Logger::get_instance().log(Logger::LogLevel::Warning,
+			"Session %d: MOVE_STOP payload too short (size=%d) -> disconnect", s->id, (int)size);
+		return false;
+	}
 
 	int   off = 0;
 	BYTE  dir = unpackByte (payload, off);
@@ -281,6 +303,10 @@ static bool PacketProc_MoveStop(Session* s, const char* payload, BYTE size)
 	// 위치 오차 검증
 	if (abs(p->_x - x) > dfERROR_RANGE || abs(p->_y - y) > dfERROR_RANGE)
 	{
+		Logger::get_instance().log(Logger::LogLevel::Warning,
+			"Session %d: MOVE_STOP SYNC sent (client=%d,%d / server=%d,%d)",
+			s->id, (int)x, (int)y, (int)p->_x, (int)p->_y);
+
 		char buf[16];
 		BYTE sz = buildSyncPayload(buf, s->id, p->_x, p->_y);
 		SendPacket(s, dfPACKET_SC_SYNC, buf, sz);
@@ -308,7 +334,13 @@ static bool PacketProc_MoveStop(Session* s, const char* payload, BYTE size)
 static bool HandleAttack(Session* s, const char* payload, BYTE size,
 	BYTE scType, int rangeX, int rangeY, int8_t damage)
 {
-	if (size < 5) return false;
+	if (size < 5)
+	{
+		Logger::get_instance().log(Logger::LogLevel::Warning,
+			"Session %d: ATTACK(0x%02X) payload too short (size=%d) -> disconnect",
+			s->id, (int)scType, (int)size);
+		return false;
+	}
 
 	int   off = 0;
 	BYTE  dir = unpackByte (payload, off);
@@ -346,6 +378,10 @@ static bool HandleAttack(Session* s, const char* payload, BYTE size,
 		// HP <= 0: 마킹만, 실제 정리는 CleanupDeadSessions() 에서
 		if (target->p->_hp <= 0)
 		{
+			Logger::get_instance().log(Logger::LogLevel::Info,
+				"Session %d killed by session %d (remaining HP: %d) -> disconnect",
+				target->id, s->id, (int)target->p->_hp);
+
 			target->isDisconnect = true;
 			HardClose(target->socket);
 		}
@@ -374,7 +410,12 @@ static bool PacketProc_Attack3(Session* s, const char* payload, BYTE size)
 
 static bool PacketProc_Echo(Session* s, const char* payload, BYTE size)
 {
-	if (size < 4) return false;
+	if (size < 4)
+	{
+		Logger::get_instance().log(Logger::LogLevel::Warning,
+			"Session %d: ECHO payload too short (size=%d) -> disconnect", s->id, (int)size);
+		return false;
+	}
 	// Time(4) 그대로 돌려줌
 	SendPacket(s, dfPACKET_SC_ECHO, payload, 4);
 	return true;
@@ -398,6 +439,8 @@ bool PacketProc(Session* s, BYTE byType, const char* payload, BYTE payloadSize)
 	case dfPACKET_CS_ECHO:       return PacketProc_Echo     (s, payload, payloadSize);
 	default:
 		// 알 수 없는 패킷 타입 → 연결 해제
+		Logger::get_instance().log(Logger::LogLevel::Warning,
+			"Session %d: unknown packet type 0x%02X -> disconnect", s->id, (int)byType);
 		return false;
 	}
 }

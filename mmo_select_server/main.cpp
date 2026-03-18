@@ -16,6 +16,7 @@
 #include "Protocol.h"
 #include "PacketProc.h"
 #include "Update.h"
+#include "Logger.h"
 
 #pragma comment(lib, "winmm.lib")
 #pragma comment(lib, "Ws2_32.lib")
@@ -37,14 +38,14 @@ bool ServerInitailize()
 {
 	if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
 	{
-		std::cerr << "wsastartup failed";
+		Logger::get_instance().log(Logger::LogLevel::Error, "WSAStartup failed (WSAError=%d)", WSAGetLastError());
 		return false;
 	}
 
 	sListenSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (sListenSocket == INVALID_SOCKET)
 	{
-		std::cerr << "listen socket initailized failed";
+		Logger::get_instance().log(Logger::LogLevel::Error, "listen socket creation failed (WSAError=%d)", WSAGetLastError());
 		return false;
 	}
 
@@ -55,14 +56,14 @@ bool ServerInitailize()
 
 	if (bind(sListenSocket, (SOCKADDR*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR)
 	{
-		std::cerr << "bind failed";
+		Logger::get_instance().log(Logger::LogLevel::Error, "bind failed (port=%d, WSAError=%d)", (int)PORT, WSAGetLastError());
 		return false;
 	}
 
 	_linger.l_onoff  = 1;
 	_linger.l_linger = 0;
 
-	std::cout << "initalized complete\n";
+	Logger::get_instance().log(Logger::LogLevel::Info, "Server initialized");
 	return true;
 }
 
@@ -70,14 +71,14 @@ bool StartServer()
 {
 	if (listen(sListenSocket, SOMAXCONN_HINT(200, 65535)) == SOCKET_ERROR)
 	{
-		std::cerr << "listen failed";
+		Logger::get_instance().log(Logger::LogLevel::Error, "listen failed (WSAError=%d)", WSAGetLastError());
 		return false;
 	}
 
 	u_long mode = 1;
 	ioctlsocket(sListenSocket, FIONBIO, &mode);
 
-	std::cout << "listening...PORT:" << PORT << "\n";
+	Logger::get_instance().log(Logger::LogLevel::Info, "Server listening on port %d", (int)PORT);
 	return true;
 }
 
@@ -119,12 +120,15 @@ void NetworkProc()
 			// WSAEWOULDBLOCK: 대기 중인 연결 없음 (정상)
 			// 그 외 에러: 리슨 소켓 이상 → 로그만 남기고 루프 탈출
 			if (WSAGetLastError() != WSAEWOULDBLOCK)
-				std::cerr << "[accept error] WSAError=" << WSAGetLastError() << "\n";
+				Logger::get_instance().log(Logger::LogLevel::Error,
+					"accept failed (WSAError=%d)", WSAGetLastError());
 			break;
 		}
 
 		if (sessions.size() >= MAX_SESSIONS)
 		{
+			Logger::get_instance().log(Logger::LogLevel::Warning,
+				"Session limit reached (%zu/%d), rejected new connection", sessions.size(), (int)MAX_SESSIONS);
 			HardClose(clientSocket);
 			continue;
 		}
@@ -202,6 +206,8 @@ void NetworkProc()
 					if (recvBytes == 0)
 					{
 						// 클라이언트 정상 종료 (FIN)
+						Logger::get_instance().log(Logger::LogLevel::Info,
+							"Session %d: client closed connection (FIN) -> disconnect", s->id);
 						s->isDisconnect = true;
 						HardClose(s->socket);
 						continue;
@@ -210,6 +216,9 @@ void NetworkProc()
 					{
 						if (WSAGetLastError() != WSAEWOULDBLOCK)
 						{
+							Logger::get_instance().log(Logger::LogLevel::Warning,
+								"Session %d: recv error (WSAError=%d) -> disconnect",
+								s->id, WSAGetLastError());
 							s->isDisconnect = true;
 							HardClose(s->socket);
 						}
@@ -227,6 +236,9 @@ void NetworkProc()
 						// 패킷 코드 불일치 → 비정상 클라이언트
 						if (header.byCode != dfPACKET_CODE)
 						{
+							Logger::get_instance().log(Logger::LogLevel::Warning,
+								"Session %d: invalid packet code (0x%02X, expected 0x%02X) -> disconnect",
+								s->id, (int)header.byCode, (int)dfPACKET_CODE);
 							s->isDisconnect = true;
 							HardClose(s->socket);
 							break;
@@ -269,6 +281,9 @@ void NetworkProc()
 						// WSAEWOULDBLOCK: OS TCP 버퍼 포화, 다음 프레임에 재시도 (정상)
 						if (WSAGetLastError() != WSAEWOULDBLOCK)
 						{
+							Logger::get_instance().log(Logger::LogLevel::Warning,
+								"Session %d: send error (WSAError=%d) -> disconnect",
+								s->id, WSAGetLastError());
 							s->isDisconnect = true;
 							HardClose(s->socket);
 						}
@@ -284,10 +299,30 @@ void NetworkProc()
 }
 
 
+static void InitLogger()
+{
+	// 시작 시각으로 파일명 생성: logs/YYYY-MM-DD_HH-MM-SS.log
+	std::time_t now = std::time(nullptr);
+	std::tm     tm  = {};
+	localtime_s(&tm, &now);
+
+	::CreateDirectoryA("logs", nullptr);  // 이미 존재하면 무시됨
+
+	char filename[64];
+	std::strftime(filename, sizeof(filename), "logs/%Y-%m-%d_%H-%M-%S.log", &tm);
+
+	Logger& logger = Logger::get_instance();
+	logger.set_threshold(Logger::LogLevel::Warning);
+	logger.set_backend(Logger::SinkBackend::WINDOWS);
+	logger.set_target_file(filename);
+}
+
 int main()
 {
 	srand((unsigned)time(nullptr));
 	timeBeginPeriod(1);
+
+	InitLogger();
 
 	if (!ServerInitailize())
 	{
